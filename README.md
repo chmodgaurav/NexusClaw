@@ -170,10 +170,6 @@ python examples.py
 - Support for DOCX and TXT document uploads
 - Document management (delete/re-index) from the UI
 
-## Screenshots
-
-_Add screenshots of the document upload flow, leave-application conversation, and Q&A source panel here._
-
 ## Contributing
 
 Issues and pull requests are welcome.
