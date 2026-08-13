@@ -1,172 +1,178 @@
-# NexusClaw
+# HR AI Agent
 
-An agentic AI CLI tool for automating codebase tasks — locally via terminal or remotely via Telegram. Built on the [Vercel AI SDK](https://sdk.vercel.ai/), [Bun](https://bun.sh/), and [OpenRouter](https://openrouter.ai/).
+An offline, retrieval-augmented HR assistant with conversational memory, built with Streamlit, LangChain, Ollama, and ChromaDB. Upload HR/legal documents (PDF or JSON), index them into a local vector store, ask grounded questions, and complete a multi-turn leave application entirely through chat.
 
----
+## Features
 
-## Architecture
+### Core RAG
+- Upload and index **PDF** and **JSON** documents into ChromaDB
+- Semantic search using **nomic-embed-text** embeddings
+- Question answering using **Gemma 3 (4B)** via Ollama, grounded in retrieved context
+- Retrieved source chunks are shown alongside every answer
+- Fully local — no external API calls once Ollama and the models are installed
 
-```
-nexusclaw/
-├── index.ts                  # CLI entrypoint (commander)
-├── ai/
-│   ├── ai.config.ts          # OpenRouter model factory
-│   └── index.ts
-├── tui/
-│   ├── wakeup.ts             # Banner + mode selector
-│   └── terminal-md.ts        # marked-terminal renderer
-└── modes/
-    ├── cli.ts                # CLI sub-mode router (agent/plan/ask)
-    ├── agent/                # Core agent engine
-    │   ├── type.ts           # ActionLog, AgentConfig, ActionType types
-    │   ├── action-tracker.ts # Append-only mutation log with status tracking
-    │   ├── tool-executor.ts  # FS operations + overlay staging layer
-    │   ├── agent-tools.ts    # AI SDK tool definitions (wraps executor)
-    │   ├── approval.ts       # CLI interactive approval flow
-    │   ├── diff-view.ts      # Unified diff generation
-    │   └── orchestrator.ts   # Agent mode entry point
-    ├── ask/
-    │   └── orchestrator.ts   # Read-only Q&A agent, optional .md save
-    ├── plan/
-    │   ├── types.ts          # Plan, PlanStep types
-    │   ├── planner.ts        # JSON-schema-constrained plan generator
-    │   ├── selection.ts      # Multiselect step picker (CLI)
-    │   ├── web-tools.ts      # Firecrawl web_search / web_crawl / fetch_url
-    │   └── orchestrator.ts   # Plan mode entry point
-    └── telegram/
-        ├── index.ts             # Telegraf bot launch
-        ├── handlers.ts          # Command + callback action registration
-        ├── agent-run.ts         # ask/agent/planSteps runners for Telegram
-        ├── approval-session.ts  # Inline keyboard approval flow
-        ├── plan-session.ts      # Interactive plan toggle UI
-        ├── auth.ts              # Owner-only guard
-        ├── constants.ts         # Welcome message
-        └── text.ts              # Telegram text helpers (clip, replyMd)
-```
+### Conversational memory
+- Per-employee session, keyed by an Employee ID entered in the sidebar
+- Multi-turn conversations that don't require repeating earlier information
+- Session isolation — no data leakage between employees
+- Context-aware follow-ups (the assistant resolves pronouns like "them" against prior turns)
+- Multi-turn leave applications that collect type, dates, and reason across several messages, then submit automatically
+- Sessions expire after 2 hours of inactivity (in-memory TTL, cleared on app restart)
 
----
+## Tech Stack
 
-## How It Works
+- **Frontend:** Streamlit
+- **LLM framework:** LangChain (`langchain-community`, `langchain-chroma`, `langchain-ollama`)
+- **Vector database:** ChromaDB (persisted at `./database/chroma`)
+- **LLM runtime:** Ollama
+- **Chat model:** Gemma 3 (4B) — `gemma3:4b`, bound to the `apply_leave` tool for tool-calling
+- **Embeddings:** `nomic-embed-text`
+- **Leave storage:** SQLite (`./database/hr.db`)
+- **Memory system:** in-memory session management with TTL-based cleanup
 
-### Staging layer
+## Installation & Setup
 
-All file mutations are **staged, never written directly**. `ToolExecutor` maintains an in-memory overlay (`Map<path, content>`) and a deletion set. `ActionTracker` records every operation as an `ActionLog` with status `pending | approved | rejected | executed`. Nothing hits disk until the user explicitly approves.
-
-```
-Agent calls tool → ToolExecutor stages change → ActionTracker logs it
-                                                        ↓
-                                            User reviews via approval flow
-                                                        ↓
-                                    applyApprovedFromTracker() writes to disk
-```
-
-### Modes
-
-| Mode | Description | Mutations |
-|---|---|---|
-| **Agent** | Free-form agentic task on your codebase | Yes — with approval |
-| **Ask** | Read-only Q&A with optional `.md` save | Optional file create |
-| **Plan** | LLM generates a step plan → you pick steps → agent executes each | Yes — with approval |
-| **Telegram** | All three modes via bot commands with inline keyboard approval | Yes — with approval |
-
----
-
-## Prerequisites
-
-- [Bun](https://bun.sh/) `>= 1.x`
-- Node.js is **not** required (Bun runtime only)
-
----
-
-## Installation
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/chmodgaurav/NexusClaw.git
-cd NexusClaw
-bun install
+git clone https://github.com/chmodgaurav/AI-HR-Agent.git
+cd AI-HR-Agent
 ```
 
----
+### 2. Install Python dependencies
 
-## Configuration
-
-Create a `.env` file in the project root:
-
-```env
-# Required
-OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_DEFAULT_MODEL=anthropic/claude-3.5-sonnet
-
-# Optional: enables web_search / web_crawl / fetch_url tools in Plan and Ask modes
-FIRECRAWL_API_KEY=fc-...
-
-# Required only for Telegram mode
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_OWNER_ID=...            # Your Telegram user ID (integer)
-
-# Optional: custom skill directories (semicolon-separated)
-SKILLS_DIRS=/path/to/skills;/another/path
+```bash
+pip install -r requirements.txt
 ```
 
-> `TELEGRAM_OWNER_ID` gates all bot commands — only that user ID can interact with the bot.
+### 3. Install Ollama
 
-`ai/ai.config.ts` builds the model from `OPENROUTER_API_KEY` and `OPENROUTER_DEFAULT_MODEL` via `@openrouter/ai-sdk-provider`; both are read at call time, so `OPENROUTER_DEFAULT_MODEL` must be set to a valid OpenRouter model ID.
+Download and install from [ollama.com](https://ollama.com).
 
----
+### 4. Pull the required models
+
+```bash
+ollama pull nomic-embed-text
+ollama pull gemma3:4b
+```
+
+### 5. Start Ollama
+
+```bash
+ollama serve
+```
+
+### 6. Run the application
+
+```bash
+streamlit run app.py
+```
+
+Open `http://localhost:8501`.
 
 ## Usage
 
-### Start
+### Document upload & indexing
+
+1. Upload a PDF or JSON file via the upload UI.
+2. The document is loaded (`PyPDFLoader` for PDF; parsed JSON for JSON) into LangChain `Document` objects.
+3. Documents are embedded with `nomic-embed-text` and stored in the ChromaDB collection at `./database/chroma`.
+
+### Multi-turn conversation
+
+1. Enter an Employee ID in the sidebar — this creates or resumes a session.
+2. Use the leave-application flow to apply for leave conversationally; the assistant asks for missing details (type, dates, reason) one at a time and submits the request to `./database/hr.db` once complete.
+3. Ask free-form HR questions elsewhere in the app; the assistant retrieves relevant chunks from ChromaDB and answers using only that context, remembering prior turns in the same session.
+
+### Example: multi-turn leave application
+
+```
+You: I want to apply for leave
+AI: What type of leave do you need?
+
+You: Casual leave
+AI: When do you need the leave?
+
+You: 2024-02-15 to 2024-02-17
+AI: Please provide a reason
+
+You: Medical appointment
+AI: Your leave request has been submitted successfully!
+```
+
+### Example: context-aware Q&A
+
+```
+You: What is the policy on medical leave?
+AI: [retrieves from knowledge base] "Medical leave policy is..."
+
+You: How many days do I get?
+AI: [remembers you asked about medical leave] "You are entitled to..."
+
+You: Can I use them for family emergencies?
+AI: [resolves "them" to medical leave] "Yes, medical leave can be used for..."
+```
+
+## Project Structure
+
+```text
+AI-HR-Agent/
+│
+├── app.py                          # Main Streamlit application
+├── chroma.py                       # Standalone ChromaDB ingestion utility
+├── conversation_memory.py          # Session and memory management (TTL-based)
+├── memory_chat_engine.py           # LLM integration with memory (MemoryChatEngine, MultiTurnLeaveHandler)
+├── tools/
+│   └── apply_leave.py              # SQLite-backed leave application tool
+├── database/
+│   ├── chroma/                     # Persisted vector store
+│   └── hr.db                       # SQLite leave-requests database
+├── dataset/
+│   ├── pdf/                        # Sample PDF documents
+│   └── json/                       # Sample JSON documents
+├── examples.py                     # Standalone usage examples for the memory system
+├── test_conversation_memory.py     # Unit tests for conversation memory
+├── test_quick.py                   # Quick smoke test
+└── requirements.txt
+```
+
+## Testing
 
 ```bash
-bun run index.ts wakeup
-# or
-bunx nexusclaw wakeup
+# Quick smoke test
+python test_quick.py
+
+# Full unit test suite
+pytest test_conversation_memory.py -v
+
+# Standalone usage examples
+python examples.py
 ```
 
-You'll see the nexusclaw ASCII banner and a mode prompt.
+## Session Management
 
-### CLI mode
+- Each employee gets a session identified by their Employee ID, created on first use in the sidebar.
+- Sessions hold conversation history for up to 2 hours of inactivity, then expire automatically.
+- Conversations are isolated per employee — no cross-session data leakage.
+- All sessions live in memory and are lost when the Streamlit process restarts; there is no persistent session store yet.
 
-```
-? Choose CLI sub-mode
-❯ Agent Mode      — give the agent a task, review & apply changes
-  Plan Mode       — generate a plan, pick steps, execute
-  Ask Mode        — ask a question, get a markdown answer
-  Back
-```
+## Notes
 
-### Telegram mode
-
-```
-/start              — show help
-/ask <question>     — read-only Q&A about your codebase
-/agent <task>       — agentic task with inline approval
-/plan <goal>        — generate plan, toggle steps, execute
-```
-
-After `/agent` or `/plan`, the bot sends an approval message with:
-- **Show Diff** — view unified diff of staged changes
-- **Accept All** — write all staged changes to disk
-- **Reject All** — discard everything
-
----
-
-## Project Structure Notes
-
-The repository also contains `ask.md` and `todo-list-app/` — these are example outputs generated by running NexusClaw's Ask and Agent modes against this project, kept as a demonstration of the tool's own capabilities rather than part of the tool itself.
-
----
+- Ollama must be running (`ollama serve`) before starting the app — embedding and chat calls fail otherwise.
+- The assistant answers only from indexed documents; if the knowledge base doesn't cover a question, it says so rather than guessing.
+- `chroma.py` provides a way to (re)index documents outside the Streamlit UI, in addition to the in-app uploader.
 
 ## Future Improvements
 
-- Persist Telegram approval sessions across bot restarts
-- Configurable staging backend (currently in-memory only, lost on process exit)
-- Additional web tool providers beyond Firecrawl
+- Persistent session storage (e.g. Redis or PostgreSQL) instead of in-memory TTL sessions
+- Conversation summarization for long chat histories
+- Hybrid search (BM25 + vector) and metadata filtering
+- Support for DOCX and TXT document uploads
+- Document management (delete/re-index) from the UI
 
 ## Screenshots
 
-_Add a screenshot of the CLI banner/mode picker and a Telegram approval flow here._
+_Add screenshots of the document upload flow, leave-application conversation, and Q&A source panel here._
 
 ## Contributing
 
@@ -174,4 +180,4 @@ Issues and pull requests are welcome.
 
 ## License
 
-See repository for license details.
+This project is intended for educational and research purposes. Modify and use it according to your project's licensing requirements.
